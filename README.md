@@ -20,6 +20,7 @@ This project is actually **two independent repos that connect to each other**:
 - [Design decisions (and why they matter)](#design-decisions-and-why-they-matter)
 - [What Data Engineering skills this project demonstrates](#what-data-engineering-skills-this-project-demonstrates)
 - [Running it locally](#running-it-locally)
+- [Credits](#credits)
 
 ## Why I built it
 
@@ -171,3 +172,7 @@ uv run sqlfluff lint airflow/walmart_project/models airflow/walmart_project/snap
 ```
 
 Airflow becomes available at `http://localhost:8080`.
+
+## Credits
+
+This project follows the walkthrough from [Ansh Lamba](https://www.youtube.com/watch?v=ZEE-jNAthB0)'s video, adapted and extended with my own changes and design decisions.
