@@ -29,6 +29,9 @@ __pycache__/
 # OS
 .DS_Store
 
+# Local Claude Code instructions — not meant to be published with the repo
+CLAUDE.md
+
 # data_project_setup is an independent repo living inside this directory;
 # keep it fully out of data_project_dbt's history
 data_project_setup/
