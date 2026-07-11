@@ -6,10 +6,10 @@ End-to-end data pipeline that simulates a real retail chain use case (the "Walma
 
 This project is actually **two independent repos that connect to each other**:
 
-| Repo                                           | Role                                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| [`data_project_setup`](../data_project_setup) | Seed ingestion: loads the original CSVs into a Postgres database ("ghost") that acts as the source system. |
-| `data_project_dbt` (this repo)               | Everything that happens next: CDC into Databricks, transformation with dbt, and orchestration with Airflow.   |
+| Repo                                           | Role                                                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`data_project_setup`](../data_project_setup) | Seed ingestion: loads the original CSVs into a Postgres database ("ghost") that acts as the source system.  |
+| `data_project_dbt` (this repo)               | Everything that happens next: CDC into Databricks, transformation with dbt, and orchestration with Airflow. |
 
 ## Table of contents
 
