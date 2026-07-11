@@ -1,173 +1,173 @@
-# Walmart Data Platform — de CSVs a un Data Warehouse orquestado
+# Walmart Data Platform — from CSVs to an orchestrated Data Warehouse
 
-*[English version](README.en.md)*
+*[Versión en español](README.es.md)*
 
-Pipeline de datos end-to-end que simula el caso real de una cadena de retail (dataset "Walmart"): captura datos operacionales, los mueve a un lakehouse en Databricks vía CDC, los transforma con dbt siguiendo una arquitectura medallion, y orquesta todo el proceso diario con Airflow en Docker.
+End-to-end data pipeline that simulates a real retail chain use case (the "Walmart" dataset): captures operational data, moves it into a Databricks lakehouse via CDC, transforms it with dbt following a medallion architecture, and orchestrates the whole daily process with Airflow in Docker.
 
-Este proyecto son en realidad **dos repos independientes que se conectan entre sí**:
+This project is actually **two independent repos that connect to each other**:
 
-| Repo                                           | Rol                                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| [`data_project_setup`](../data_project_setup) | Ingesta semilla: carga los CSV originales a una base Postgres ("ghost") que actúa como sistema fuente. |
-| `data_project_dbt` (este repo)               | Todo lo que pasa después: CDC hacia Databricks, transformación con dbt y orquestación con Airflow.   |
+| Repo                                           | Role                                                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`data_project_setup`](../data_project_setup) | Seed ingestion: loads the original CSVs into a Postgres database ("ghost") that acts as the source system.  |
+| `data_project_dbt` (this repo)               | Everything that happens next: CDC into Databricks, transformation with dbt, and orchestration with Airflow. |
 
-## Índice
+## Table of contents
 
-- [Por qué lo construí](#por-qué-lo-construí)
-- [Arquitectura](#arquitectura)
-- [Componentes](#componentes)
-- [Stack tecnológico](#stack-tecnológico)
-- [Decisiones de diseño (y por qué importan)](#decisiones-de-diseño-y-por-qué-importan)
-- [Qué habilidades de Data Engineer demuestra este proyecto](#qué-habilidades-de-data-engineer-demuestra-este-proyecto)
-- [Cómo correrlo localmente](#cómo-correrlo-localmente)
+- [Why I built it](#why-i-built-it)
+- [Architecture](#architecture)
+- [Components](#components)
+- [Tech stack](#tech-stack)
+- [Design decisions (and why they matter)](#design-decisions-and-why-they-matter)
+- [What Data Engineering skills this project demonstrates](#what-data-engineering-skills-this-project-demonstrates)
+- [Running it locally](#running-it-locally)
 
-## Por qué lo construí
+## Why I built it
 
-Quería un proyecto que no fuera "un notebook con un CSV", sino algo que se pareciera a un pipeline de producción real: con una fuente operacional separada del warehouse, ingesta incremental (no full-reload cada vez), un modelo de capas con responsabilidades claras, tests automatizados, y un orquestador que corre solo todos los días. La idea era tocar, de punta a punta, las piezas con las que se trabaja como Data Engineer: una base transaccional, un pipeline de CDC, un data warehouse cloud, un framework de transformación (dbt) y un orquestador (Airflow) corriendo en contenedores — no solo la parte de SQL.
+I wanted a project that wasn't "a notebook with a CSV," but something closer to a real production pipeline: an operational source separated from the warehouse, incremental ingestion (not a full reload every time), a layered model with clear responsibilities, automated tests, and an orchestrator that runs on its own every day. The idea was to touch, end to end, the pieces a Data Engineer actually works with: a transactional database, a CDC pipeline, a cloud data warehouse, a transformation framework (dbt), and an orchestrator (Airflow) running in containers — not just the SQL part.
 
-## Arquitectura
+## Architecture
 
-![Mapa visual del pipeline: Postgres/S3 → CDC/Files → dbt (incremental, one big table, star schema) → Airflow](docs/architecture-overview.png)
-*Vista general: la fuente OLTP (Postgres "ghost") y la fuente externa (S3) llegan a Databricks por caminos distintos; solo el primero pasa por dbt/Airflow y llega al STAR schema.*
+![Visual map of the pipeline: Postgres/S3 → CDC/Files → dbt (incremental, one big table, star schema) → Airflow](docs/architecture-overview.png)
+*Overview: the OLTP source (Postgres "ghost") and the external source (S3) reach Databricks through different paths; only the first one goes through dbt/Airflow and lands in the STAR schema.*
 
-## Componentes
+## Components
 
-### 1. Ingesta semilla — `data_project_setup`
+### 1. Seed ingestion — `data_project_setup`
 
-- `walmart_dataset/data/*.csv` — el dataset crudo (customers, stores, products, employees, orders, order_items).
-- `walmart_dataset/ddl/walmart_schema.sql` — DDL de las tablas destino en Postgres.
-- `load_data.py` — script en Python (`psycopg2`) que hace `COPY ... FROM STDIN WITH CSV HEADER` de cada CSV hacia el schema `raw` de la base Postgres.
+- `walmart_dataset/data/*.csv` — the raw dataset (customers, stores, products, employees, orders, order_items).
+- `walmart_dataset/ddl/walmart_schema.sql` — DDL for the destination tables in Postgres.
+- `load_data.py` — Python script (`psycopg2`) that runs `COPY ... FROM STDIN WITH CSV HEADER` for each CSV into the `raw` schema of the Postgres database.
 
-Este repo se mantiene **independiente** de `data_project_dbt` porque resuelve una responsabilidad distinta: poner los datos en el sistema fuente, no transformarlos. En un caso real esto sería el rol de un sistema operacional (un ERP, un POS) — aquí se simula con esta carga puntual de CSVs.
+This repo is kept **independent** from `data_project_dbt` because it solves a different responsibility: getting the data into the source system, not transforming it. In a real setup this would be the role of an operational system (an ERP, a POS) — here it's simulated with this one-off CSV load.
 
-### 2. Base "ghost" (Postgres) — sistema fuente agentic
+### 2. The "ghost" database (Postgres) — agentic source system
 
-"ghost" (`db.ghost.build`) no es una instancia Postgres administrada a mano: es una **base de datos agentic**. Se creó a partir únicamente del DDL (`walmart_dataset/ddl/walmart_schema.sql`) y lenguaje natural — un agente leyó ese archivo y aprovisionó la base de datos, el schema y las tablas sin que nadie corriera `CREATE DATABASE`/`CREATE TABLE` a mano. Ya con el schema creado, `load_data.py` (punto 1) hizo la ingesta real de los CSVs.
+"ghost" (`db.ghost.build`) isn't a hand-administered Postgres instance — it's an **agentic database**. It was created purely from the DDL (`walmart_dataset/ddl/walmart_schema.sql`) and natural language — an agent read that file and provisioned the database, schema, and tables without anyone running `CREATE DATABASE`/`CREATE TABLE` by hand. Once the schema existed, `load_data.py` (item 1) did the actual CSV ingestion.
 
-Trabajar con una base agentic como Ghost da ventajas que una instancia Postgres tradicional no tiene de forma nativa — por ejemplo, **fork de la base de datos**: se puede crear una copia/branch completa de la base (a nivel de git-branch, pero de datos) para probar migraciones, seeds o cambios de schema sin tocar la instancia principal, y descartarla o promoverla después. ([Más detalle sobre bases agentic y forking →](docs/CONCEPTOS.md#base-ghost-como-base-de-datos-agentic))
+Working with an agentic database like Ghost brings advantages a traditional Postgres instance doesn't have natively — for example, **database forking**: you can create a full copy/branch of the database (like a git branch, but for data) to test migrations, seeds, or schema changes without touching the primary instance, then discard it or promote it later ([more detail on agentic databases and forking →](docs/CONCEPTS.md#the-ghost-database-as-an-agentic-database)).
 
-Ghost es el punto desde el que Databricks hace **CDC (Change Data Capture)**: en vez de recargar todo el dataset cada vez, el job de Databricks solo trae los cambios (`INSERT`, `UPDATE`, `DELETE`) desde la última corrida.
+Ghost is the point from which Databricks does **CDC (Change Data Capture)**: instead of reloading the whole dataset every time, the Databricks job only pulls the changes (`INSERT`, `UPDATE`, `DELETE`) since the last run.
 
-### 3. Ingesta a Databricks (Bronze) — pipeline que terminó en Airflow
+### 3. Ingestion into Databricks (Bronze) — the pipeline that ended up in Airflow
 
-Ese pipeline de CDC arrancó como un job independiente en Databricks (referenciado por `DATABRICKS_INGEST_JOB_ID`) y más adelante quedó integrado como la primera tarea del DAG de Airflow (`ingest_cdc` en `orchestrate.py`), que lo dispara vía `WorkspaceClient` y hace *polling* de su estado hasta que termina. El job deposita los datos en el catálogo `walmart`, schema `bronze` — la capa "raw" dentro del lakehouse, sin transformar.
+That CDC pipeline started as an independent job in Databricks (referenced by `DATABRICKS_INGEST_JOB_ID`) and later became integrated as the first task of the Airflow DAG (`ingest_cdc` in `orchestrate.py`), which triggers it via `WorkspaceClient` and polls its status until it finishes. The job lands the data in the `walmart` catalog, `bronze` schema — the "raw" layer inside the lakehouse, untransformed.
 
-![Jobs & Pipelines en Databricks: ingest_walmart, ingest_walmart job (scheduled) y postgres_to_bronze](docs/Databricks_jobs_pipelines.png)
-*El job de CDC (`postgres_to_bronze`) corriendo en Databricks Workflows, junto al job aislado `ST-walmart.gold.reviews` de la sección 5.*
+![Jobs & Pipelines in Databricks: ingest_walmart, ingest_walmart job (scheduled), and postgres_to_bronze](docs/Databricks_jobs_pipelines.png)
+*The CDC job (`postgres_to_bronze`) running in Databricks Workflows, alongside the isolated `ST-walmart.gold.reviews` job from section 5.*
 
-![Catalog Explorer — catálogo walmart, schema bronze con las 6 tablas fuente](docs/Databricks_bronze.png)
-*Las 6 tablas fuente ya aterrizadas en `walmart.bronze`, sin transformar.*
+![Catalog Explorer — walmart catalog, bronze schema with the 6 source tables](docs/Databricks_bronze.png)
+*The 6 source tables already landed in `walmart.bronze`, untransformed.*
 
-### 4. Transformación con dbt — arquitectura medallion
+### 4. Transformation with dbt — medallion architecture
 
-Todo vive en `airflow/walmart_project/`, target Databricks (catálogo `walmart`):
+Everything lives in `airflow/walmart_project/`, targeting Databricks (catalog `walmart`):
 
-1. **Source** (`models/source/sources.yml`) — declara `bronze.orders`, `customers`, `products`, `order_items`, `employees`, `stores`.
-2. **Silver técnica** (`models/silver_t/`, schema `silver_t`) — un modelo **incremental** por entidad. Cada uno agrega `processed_at` y solo procesa filas con `updated_timestamp` más nuevo que lo ya cargado (`is_incremental()`), en vez de reprocesar toda la tabla cada corrida.
-3. **Silver de negocio** (`models/silver_b/obt_b.sql`, schema `silver_b`) — una "one big table" (OBT) que joinea las 6 tablas `silver_t` en un solo modelo ancho. Es un **pipeline metadata-driven**: el JOIN no está escrito a mano por tabla, sino generado por un loop de Jinja sobre una lista de configuración (`configs = [{table, columns, alias, join_condition}, ...]`) — agregar una nueva fuente es agregar una entrada a esa lista, no escribir SQL nuevo.
-4. **Gold ephemeral** (`models/gold/ephemeral/eph_*.sql`) — recortes de `obt_b` por entidad. Al materializarlos como `ephemeral`, dbt no crea tabla ni vista física en Databricks: en tiempo de compilación los **inyecta como CTE** dentro de cualquier modelo que los referencie con `ref()`. Es modularidad gratis — un archivo, una responsabilidad, por entidad — sin pagar el costo de storage/compute de un paso que solo existe para alimentar al siguiente.
-5. **Gold — dimensiones SCD2** (`snapshots/dim_*.yml`) — snapshots de dbt (`strategy: timestamp`) sobre los modelos `eph_*`, que arman dimensiones históricas (`dim_orders`, `dim_customers`, `dim_products`, `dim_stores`, `dim_employees`). Cada vez que una fila cambia, dbt cierra la versión anterior (`dbt_valid_to`) y abre una nueva (`dbt_valid_from`) automáticamente — el patrón **Slowly Changing Dimension Type 2**, que a mano significa escribir (y mantener) un `MERGE` con detección de cambios, llaves surrogadas y control de concurrencia por cada dimensión. Acá es la misma config declarativa de ~10 líneas, aplicada igual a las 5.
-6. **Gold — hechos** (`models/gold/fact/fact_orders.sql`) — la tabla de hechos al grano de línea de orden, lista para consumo analítico.
+1. **Source** (`models/source/sources.yml`) — declares `bronze.orders`, `customers`, `products`, `order_items`, `employees`, `stores`.
+2. **Silver technical** (`models/silver_t/`, schema `silver_t`) — one **incremental** model per entity. Each one adds `processed_at` and only processes rows with an `updated_timestamp` newer than what's already loaded (`is_incremental()`), instead of reprocessing the whole table every run.
+3. **Silver business** (`models/silver_b/obt_b.sql`, schema `silver_b`) — a "one big table" (OBT) that joins the 6 `silver_t` tables into a single wide model. It's a **metadata-driven pipeline**: the JOIN isn't hand-written per table, it's generated by a Jinja loop over a configuration list (`configs = [{table, columns, alias, join_condition}, ...]`) — adding a new source means adding an entry to that list, not writing new SQL.
+4. **Gold ephemeral** (`models/gold/ephemeral/eph_*.sql`) — per-entity slices of `obt_b`. By materializing them as `ephemeral`, dbt never creates a physical table or view in Databricks: at compile time it **inlines them as a CTE** into whatever model references them via `ref()`. It's modularity for free — one file, one responsibility, per entity — without paying the storage/compute cost of a step that only exists to feed the next one.
+5. **Gold — SCD2 dimensions** (`snapshots/dim_*.yml`) — dbt snapshots (`strategy: timestamp`) over the `eph_*` models, building historical dimensions (`dim_orders`, `dim_customers`, `dim_products`, `dim_stores`, `dim_employees`). Every time a row changes, dbt closes the previous version (`dbt_valid_to`) and opens a new one (`dbt_valid_from`) automatically — the **Slowly Changing Dimension Type 2** pattern, which by hand means writing (and maintaining) a `MERGE` with change detection, surrogate keys, and concurrency control for each dimension. Here it's the same ~10-line declarative config, applied identically to all 5.
+6. **Gold — facts** (`models/gold/fact/fact_orders.sql`) — the fact table at order-line grain, ready for analytical consumption.
 
-Los puntos 4 y 5 son, para mí, el argumento más fuerte para usar dbt en este proyecto: convierten dos problemas clásicamente manuales de ingeniería de datos — modularizar transformaciones sin pagar costo de materialización, y mantener historial tipo SCD2 por dimensión — en configuración declarativa y reutilizable, en vez de cientos de líneas de SQL/`MERGE` escritas y mantenidas a mano, una por una, por cada tabla. (Mecánica completa de ambos patrones en [docs/CONCEPTOS.md](docs/CONCEPTOS.md#materialización-ephemeral-gold).)
+Points 4 and 5 are, to me, the strongest argument for using dbt in this project: they turn two classically manual data engineering problems — modularizing transformations without paying a materialization cost, and maintaining SCD2-style history per dimension — into declarative, reusable configuration, instead of hundreds of hand-written and hand-maintained lines of SQL/`MERGE`, one per table. (Full mechanics of both patterns in [docs/CONCEPTS.md](docs/CONCEPTS.md#ephemeral-materialization-gold).)
 
-Las dimensiones (`dim_*`) más la tabla de hechos (`fact_orders`) forman un **STAR Schema** clásico en la capa `gold`: `fact_orders` en el centro, referenciando cada `dim_*` por su llave natural — el modelo estándar para que herramientas de BI (Looker, Power BI, Tableau) consuman los datos sin tener que reconstruir joins complejos.
+The dimensions (`dim_*`) plus the fact table (`fact_orders`) form a classic **STAR Schema** in the `gold` layer: `fact_orders` at the center, referencing each `dim_*` by its natural key — the standard model for BI tools (Looker, Power BI, Tableau) to consume the data without having to rebuild complex joins.
 
-Un macro (`macros/custom_schema.sql`) sobreescribe `generate_schema_name` de dbt para que cada modelo caiga exactamente en el schema declarado (`silver_t`, `silver_b`, `gold`), sin la concatenación por defecto de dbt.
+A macro (`macros/custom_schema.sql`) overrides dbt's `generate_schema_name` so every model lands exactly in its declared schema (`silver_t`, `silver_b`, `gold`), without dbt's default concatenation.
 
-![Catalog Explorer — schema silver_t (6 tablas técnicas) y silver_b (obt_b)](docs/Databricks_silver.png)
-*Las 6 tablas incrementales de `silver_t` y la OBT (`obt_b`) en `silver_b`, ya joineadas.*
+![Catalog Explorer — silver_t schema (6 technical tables) and silver_b (obt_b)](docs/Databricks_silver.png)
+*The 6 incremental `silver_t` tables and the OBT (`obt_b`) in `silver_b`, already joined.*
 
-### 5. Ingesta externa aislada — AWS S3 → Databricks (`gold.reviews`)
+### 5. Isolated external ingestion — AWS S3 → Databricks (`gold.reviews`)
 
-![Detalle de cada componente del pipeline y por qué gold.reviews (S3 → Databricks) queda fuera del modelado dbt](docs/architecture-detailed.png)
-*Mismo mapa que la sección "Arquitectura", pero con el detalle de cada componente y la nota explícita de que `gold.reviews` no está integrado al STAR schema por diseño.*
+![Detail of each pipeline component and why gold.reviews (S3 → Databricks) stays outside the dbt modeling](docs/architecture-detailed.png)
+*Same map as the "Architecture" section, but with detail on each component and an explicit note that `gold.reviews` is not integrated into the STAR schema, by design.*
 
-![Catalog Explorer — schema gold: dim_*, fact_orders y reviews conviviendo sin joins entre sí](docs/Databricks_gold.png)
+![Catalog Explorer — gold schema: dim_*, fact_orders, and reviews coexisting with no joins between them](docs/Databricks_gold.png)
 
-La captura de arriba lo muestra en vivo: `reviews` está en el mismo schema `gold` que `fact_orders`/`dim_*`, pero como tabla suelta — no hay ningún modelo dbt que la referencie.
+The screenshot above shows it live: `reviews` sits in the same `gold` schema as `fact_orders`/`dim_*`, but as a standalone table — no dbt model references it.
 
-El objetivo de esta conexión fue puramente de **aprendizaje de infraestructura**: entender cómo se conecta S3 con Databricks, no enriquecer el modelo de datos. Se subió un CSV de reseñas de producto a un bucket de **S3** y se conectó a Databricks vía una **External Location** (Unity Catalog): Databricks emite el token/credencial que AWS confía para autorizar el acceso al bucket. Esta conexión es completamente independiente del flujo principal (Postgres → CDC) y creó un job en Databricks (`ST-walmart.gold.reviews`) que materializa los datos directamente en `walmart.gold.reviews`.
+The goal of this connection was purely **infrastructure learning**: understanding how to connect S3 to Databricks, not enriching the data model. A product-reviews CSV was uploaded to an **S3** bucket and connected to Databricks via a Unity Catalog **External Location**: Databricks issues the token/credential that AWS trusts to authorize access to the bucket. This connection is completely independent from the main flow (Postgres → CDC) and created a Databricks job (`ST-walmart.gold.reviews`) that materializes the data directly into `walmart.gold.reviews`.
 
-Este es un cambio de **infraestructura/ecosistema** (configurado en las consolas de AWS y Databricks), no de código: no hay ningún archivo en este repo que lo represente. `gold.reviews` vive **aislada a propósito** — no forma parte del modelado dbt (medallion) de este proyecto ni hay plan de integrarla; si en algún momento se quisiera unir al STAR schema, faltaría escribir un modelo dbt (`source`/`ref`) que la conecte con `fact_orders`/`dim_products`.
+This is an **infrastructure/ecosystem** change (configured in the AWS and Databricks consoles), not a code change: there's no file in this repo that represents it. `gold.reviews` lives **intentionally isolated** — it isn't part of this project's dbt (medallion) modeling and there's no plan to integrate it; if it were ever joined into the STAR schema, that would require writing a dbt model (`source`/`ref`) connecting it to `fact_orders`/`dim_products`.
 
-### 6. Orquestación — Airflow + Docker Compose
+### 6. Orchestration — Airflow + Docker Compose
 
-`airflow/dags/orchestrate.py` define un único DAG (`orchestrate`) que encadena todo el flujo diario:
+`airflow/dags/orchestrate.py` defines a single DAG (`orchestrate`) that chains the whole daily flow:
 
 ```text
 ingest_cdc → clean_target → source_freshness → silver_technical → silver_technical_tests
   → silver_business → silver_business_tests → gold_ephemeral → gold_dimensions → gold_facts
 ```
 
-![Airflow UI — ejecución exitosa del DAG orchestrate, las 10 tareas en verde](docs/Airflow_dags.png)
-*Corrida completa del DAG `orchestrate`, las 10 tareas en verde de punta a punta.*
+![Airflow UI — successful run of the orchestrate DAG, all 10 tasks green](docs/Airflow_dags.png)
+*A full run of the `orchestrate` DAG, all 10 tasks green end to end.*
 
-- `ingest_cdc` dispara y espera el job de Databricks (SDK `WorkspaceClient`, polling cada 5s).
-- `clean_target` (`@task.bash`) borra `target/` y `logs/` del proyecto dbt antes de cada corrida, para que ningún artefacto de una ejecución previa (manifest, compilación cacheada) contamine la actual.
-- `source_freshness` corre `dbt source freshness` antes de transformar, para no construir sobre datos fuente obsoletos.
-- Cada capa (`silver_t`, `silver_b`) corre su `dbt run` seguido de su `dbt test`, para no dejar avanzar el pipeline si una capa no pasa sus validaciones.
-- `gold_dimensions` corre `dbt snapshot --select dim_orders dim_customers dim_products dim_stores dim_employees` para materializar el historial SCD2, en vez de un `dbt snapshot` sin filtro.
+- `ingest_cdc` triggers and waits on the Databricks job (SDK `WorkspaceClient`, polling every 5s).
+- `clean_target` (`@task.bash`) deletes `target/` and `logs/` from the dbt project before every run, so no artifact from a previous execution (manifest, cached compilation) contaminates the current one.
+- `source_freshness` runs `dbt source freshness` before transforming, so nothing is built on top of stale source data.
+- Each layer (`silver_t`, `silver_b`) runs its `dbt run` followed by its `dbt test`, so the pipeline doesn't move forward if a layer fails validation.
+- `gold_dimensions` runs `dbt snapshot --select dim_orders dim_customers dim_products dim_stores dim_employees` to materialize the SCD2 history, instead of an unfiltered `dbt snapshot`.
 
-Todo el stack de Airflow (webserver, scheduler, dag-processor, worker, triggerer, Postgres, Redis) corre containerizado vía `docker-compose.yaml` con `CeleryExecutor` — el scheduler encola las tareas en Redis y uno o más workers las ejecutan, en vez de correr todo en un solo proceso ([cómo funciona →](docs/CONCEPTOS.md#celeryexecutor-de-airflow)).
+The whole Airflow stack (webserver, scheduler, dag-processor, worker, triggerer, Postgres, Redis) runs containerized via `docker-compose.yaml` with `CeleryExecutor` — the scheduler enqueues tasks in Redis and one or more workers execute them, instead of running everything in a single process ([how it works →](docs/CONCEPTS.md#airflows-celeryexecutor)).
 
-## Stack tecnológico
+## Tech stack
 
-- **Orquestación:** Apache Airflow 3.x (CeleryExecutor, Docker Compose)
-- **Transformación:** dbt-core + dbt-databricks
-- **Warehouse / Lakehouse:** Databricks (catálogo `walmart`)
-- **Sistema fuente:** PostgreSQL
-- **Ingesta:** Python (`psycopg2`), Databricks Jobs (CDC)
-- **Data lake externo:** AWS S3, conectado a Databricks vía External Location (Unity Catalog)
-- **Infraestructura:** Docker / Docker Compose
-- **Gestión de dependencias:** `uv`
-- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — `ruff` sobre `airflow/dags`, `sqlfluff` (templater de dbt, contra el target real de Databricks) y `dbt test`, en cada push/PR a `main`.
+- **Orchestration:** Apache Airflow 3.x (CeleryExecutor, Docker Compose)
+- **Transformation:** dbt-core + dbt-databricks
+- **Warehouse / Lakehouse:** Databricks (catalog `walmart`)
+- **Source system:** PostgreSQL
+- **Ingestion:** Python (`psycopg2`), Databricks Jobs (CDC)
+- **External data lake:** AWS S3, connected to Databricks via External Location (Unity Catalog)
+- **Infrastructure:** Docker / Docker Compose
+- **Dependency management:** `uv`
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — `ruff` over `airflow/dags`, `sqlfluff` (dbt templater, against the real Databricks target), and `dbt test`, on every push/PR to `main`.
 
-## Decisiones de diseño (y por qué importan)
+## Design decisions (and why they matter)
 
-Resumen corto de cada decisión — el mecanismo completo (qué problema resuelve, qué pasaría sin él, cómo funciona paso a paso) está en **[docs/CONCEPTOS.md](docs/CONCEPTOS.md)**.
+Short summary of each decision — the full mechanics (what problem it solves, what would happen without it, how it works step by step) live in **[docs/CONCEPTS.md](docs/CONCEPTS.md)**.
 
-- **Medallion architecture (bronze → silver → gold):** separa "datos tal cual llegan" de "datos limpios" de "datos listos para negocio", aislando en qué capa se rompió algo. → [detalle](docs/CONCEPTOS.md#arquitectura-medallion-bronze--silver--gold)
-- **Modelos incrementales en `silver_t`:** solo procesa lo que cambió desde la última corrida, no el histórico completo — el patrón real en pipelines de volumen alto. → [detalle](docs/CONCEPTOS.md#modelos-incrementales-en-silver_t)
-- **CDC en vez de extract-and-replace:** refleja cómo se integran sistemas operacionales reales con un warehouse, sin tumbar la fuente ni mover más datos de los necesarios. → [detalle](docs/CONCEPTOS.md#cdc-en-vez-de-extract-and-replace)
-- **Snapshots de dbt para dimensiones (SCD2):** conserva el historial de cambios de `customers`/`products`, no solo el estado actual — necesario para análisis histórico correcto. → [detalle](docs/CONCEPTOS.md#snapshots-de-dbt-para-dimensiones-scd2)
-- **OBT (`obt_b`) generado con Jinja:** metaprogramación en dbt para no repetir 6 bloques de JOIN casi idénticos a mano. → [detalle](docs/CONCEPTOS.md#obt-metadata-driven-con-jinja-silver_b)
-- **Tests después de cada capa, no solo al final:** el DAG falla rápido si `silver_t` o `silver_b` no pasan sus tests, en vez de construir `gold` sobre datos ya inválidos. → [detalle](docs/CONCEPTOS.md#tests-después-de-cada-capa-no-solo-al-final)
-- **Repos separados para ingesta vs. transformación:** cada repo tiene una responsabilidad y un ciclo de vida propios — se puede tocar la ingesta sin tocar el warehouse, y viceversa.
-- **Secretos fuera del código:** las credenciales de Databricks se leen de variables de entorno inyectadas vía `.env` + Docker Compose, nunca hardcodeadas en el DAG. → [detalle](docs/CONCEPTOS.md#secretos-fuera-del-código)
-- **CDC directo desde OLTP para el flujo principal, S3 solo para datos externos:** el dataset core no pasa por un data lake — se simula un sistema fuente OLTP y se hace CDC directo a Databricks; S3 se reserva para un dataset externo y complementario (reseñas) que no nace de ningún sistema operacional propio. → [detalle](docs/CONCEPTOS.md#s3-aislado-vs-cdc-del-flujo-principal) / ver [Ingesta externa aislada](#5-ingesta-externa-aislada--aws-s3--databricks-goldreviews).
+- **Medallion architecture (bronze → silver → gold):** separates "data as it arrives" from "clean data" from "data ready for business use," isolating which layer broke. → [details](docs/CONCEPTS.md#medallion-architecture-bronze--silver--gold)
+- **Incremental models in `silver_t`:** only processes what changed since the last run, not the whole history — the real pattern used in high-volume pipelines. → [details](docs/CONCEPTS.md#incremental-models-in-silver_t)
+- **CDC instead of extract-and-replace:** reflects how real operational systems integrate with a warehouse, without hammering the source or moving more data than necessary. → [details](docs/CONCEPTS.md#cdc-instead-of-extract-and-replace)
+- **dbt snapshots for dimensions (SCD2):** preserves the history of changes in `customers`/`products`, not just the current state — needed for correct historical analysis. → [details](docs/CONCEPTS.md#dbt-snapshots-for-dimensions-scd2)
+- **Jinja-generated OBT (`obt_b`):** metaprogramming in dbt to avoid hand-repeating 6 nearly identical JOIN blocks. → [details](docs/CONCEPTS.md#metadata-driven-obt-with-jinja-silver_b)
+- **Tests after every layer, not only at the end:** the DAG fails fast if `silver_t` or `silver_b` don't pass their tests, instead of building `gold` on top of already-invalid data. → [details](docs/CONCEPTS.md#tests-after-every-layer-not-just-at-the-end)
+- **Separate repos for ingestion vs. transformation:** each repo has its own responsibility and lifecycle — you can touch ingestion without touching the warehouse, and vice versa.
+- **Secrets kept out of the code:** Databricks credentials are read from environment variables injected via `.env` + Docker Compose, never hardcoded in the DAG. → [details](docs/CONCEPTS.md#secrets-kept-out-of-the-code)
+- **Direct CDC from OLTP for the main flow, S3 only for external data:** the core dataset doesn't go through a data lake — an OLTP source system is simulated and CDC'd directly into Databricks; S3 is reserved for an external, complementary dataset (reviews) that doesn't originate from any operational system of its own. → [details](docs/CONCEPTS.md#isolated-s3-vs-cdc-for-the-main-flow) / see [Isolated external ingestion](#5-isolated-external-ingestion--aws-s3--databricks-goldreviews).
 
-## Qué habilidades de Data Engineer demuestra este proyecto
+## What Data Engineering skills this project demonstrates
 
-- **Modelado de datos:** arquitectura medallion, OBT, **Slowly Changing Dimensions (SCD2)**, **STAR Schema** (`fact_orders` + `dim_*`) — los patrones que se usan en warehouses reales, no solo tablas planas.
-- **dbt en profundidad:** modelos incrementales, modelos ephemeral, snapshots, tests, macros, configuración por carpeta, **pipeline metadata-driven** (generación dinámica de SQL con Jinja a partir de una lista de configuración, no SQL repetido a mano).
-- **Orquestación:** diseño de un DAG con dependencias explícitas, *bash operators* vs. *python tasks*, y un patrón run→test por capa.
-- **Integración de sistemas:** mover datos entre un sistema operacional (Postgres) y un lakehouse (Databricks) vía CDC, no solo cargas manuales.
-- **Infraestructura como código:** stack completo de Airflow reproducible con Docker Compose.
-- **Higiene de secretos y control de versiones:** identificar credenciales hardcodeadas, moverlas a variables de entorno, y estructurar `.gitignore`/repos para que nunca terminen en el historial de git — un error común que aprendí a detectar y corregir en este mismo proyecto.
-- **CI/CD:** pipeline de GitHub Actions que corre lint (`ruff`, `sqlfluff` vía el templater de dbt) y `dbt test` contra el warehouse real en cada push/PR, para no depender de que el desarrollador se acuerde de correrlo localmente.
+- **Data modeling:** medallion architecture, OBT, **Slowly Changing Dimensions (SCD2)**, **STAR Schema** (`fact_orders` + `dim_*`) — the patterns used in real warehouses, not just flat tables.
+- **dbt in depth:** incremental models, ephemeral models, snapshots, tests, macros, per-folder configuration, **metadata-driven pipeline** (dynamic SQL generation with Jinja from a configuration list, not hand-repeated SQL).
+- **Orchestration:** designing a DAG with explicit dependencies, *bash operators* vs. *python tasks*, and a run→test pattern per layer.
+- **Systems integration:** moving data between an operational system (Postgres) and a lakehouse (Databricks) via CDC, not just manual loads.
+- **Infrastructure as code:** the full Airflow stack reproducible with Docker Compose.
+- **Secrets hygiene and version control:** identifying hardcoded credentials, moving them to environment variables, and structuring `.gitignore`/repos so they never end up in git history — a common mistake I learned to catch and fix in this very project.
+- **CI/CD:** a GitHub Actions pipeline that runs lint (`ruff`, `sqlfluff` via the dbt templater) and `dbt test` against the real warehouse on every push/PR, instead of relying on the developer remembering to run it locally.
 
-## Cómo correrlo localmente
+## Running it locally
 
 ```bash
-# 1. Dependencias Python (incluye ruff/sqlfluff con --all-groups)
+# 1. Python dependencies (includes ruff/sqlfluff with --all-groups)
 uv sync --all-groups
 
-# 2. Levantar Airflow
+# 2. Bring up Airflow
 cd airflow
-cp .env.example .env   # completar DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_INGEST_JOB_ID
+cp .env.example .env   # fill in DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_INGEST_JOB_ID
 docker-compose up airflow-init
 docker-compose up
 
-# 3. dbt (contra el mismo proyecto que usa Airflow) — requiere DATABRICKS_TOKEN exportado en el shell local
+# 3. dbt (against the same project Airflow uses) — requires DATABRICKS_TOKEN exported in your local shell
 cd walmart_project
-export DATABRICKS_TOKEN=<tu-token>
+export DATABRICKS_TOKEN=<your-token>
 dbt run
 dbt test
 
-# 4. Lint (lo que corre en CI)
+# 4. Lint (what runs in CI)
 uv run ruff check airflow/dags
 uv run sqlfluff lint airflow/walmart_project/models airflow/walmart_project/snapshots
 ```
 
-Airflow queda disponible en `http://localhost:8080`.
+Airflow becomes available at `http://localhost:8080`.

@@ -2,7 +2,7 @@
 
 *[English version](CONCEPTS.md)*
 
-Este documento explica, con mecánica y ejemplos concretos, el "por qué" detrás de cada decisión de diseño del proyecto. El [README](../README.md) las menciona en una línea; acá está el detalle completo — qué problema resuelve cada patrón, qué pasaría sin él, y cómo funciona exactamente en este pipeline.
+Este documento explica, con mecánica y ejemplos concretos, el "por qué" detrás de cada decisión de diseño del proyecto. El [README](../README.es.md) las menciona en una línea; acá está el detalle completo — qué problema resuelve cada patrón, qué pasaría sin él, y cómo funciona exactamente en este pipeline.
 
 ## Índice
 
@@ -170,4 +170,4 @@ Este no es tanto un patrón técnico como una decisión consciente de **qué mec
 - El dataset **core** del negocio (customers, orders, products, employees, stores, order_items) viene de un sistema **operacional vivo** — simulado con Postgres "ghost", que representa lo que en un caso real sería un ERP o un POS emitiendo transacciones constantemente. Para ese tipo de fuente, **CDC** es el patrón correcto: refleja cambios incrementales de un sistema que nunca deja de escribir.
 - El dataset de **reseñas** (`gold.reviews`) es un archivo estático (`reviews.csv`) que no nace de ningún sistema operacional propio — es un dataset complementario, cargado una vez. Para ese tipo de fuente, un **data lake (S3) + carga puntual** es un patrón razonable — no tendría sentido montar un pipeline de CDC para un CSV que no cambia.
 
-La elección de mecanismo (CDC vs. carga desde data lake) depende de la naturaleza de la fuente, no es una preferencia arbitraria. Ver también la sección "[Ingesta externa aislada](../README.md#5-ingesta-externa-aislada--aws-s3--databricks-goldreviews)" del README para el contexto completo de por qué `gold.reviews` se mantiene fuera del modelado dbt.
+La elección de mecanismo (CDC vs. carga desde data lake) depende de la naturaleza de la fuente, no es una preferencia arbitraria. Ver también la sección "[Ingesta externa aislada](../README.es.md#5-ingesta-externa-aislada--aws-s3--databricks-goldreviews)" del README para el contexto completo de por qué `gold.reviews` se mantiene fuera del modelado dbt.
