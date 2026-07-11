@@ -1,0 +1,26 @@
+[project]
+name = "data-project-dbt"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "apache-airflow>=3.3.0",
+    "databricks-sdk>=0.47.0",
+    "dbt-core>=1.11.12",
+    "dbt-databricks>=1.10.9",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.21",
+    "sqlfluff>=4.2.2",
+    "sqlfluff-templater-dbt>=4.2.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

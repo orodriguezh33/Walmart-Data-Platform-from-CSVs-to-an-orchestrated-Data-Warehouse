@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: products_t
+    columns:
+      - name: product_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: price
+        data_tests:
+          - not_null
+
+  - name: orders_t
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - unique

@@ -1,0 +1,15 @@
+[sqlfluff]
+templater = dbt
+dialect = databricks
+
+[sqlfluff:templater:dbt]
+project_dir = airflow/walmart_project
+profiles_dir = airflow/walmart_project
+profile = walmart_project
+target = dev
+
+[sqlfluff:indentation]
+tab_space_size = 4
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower

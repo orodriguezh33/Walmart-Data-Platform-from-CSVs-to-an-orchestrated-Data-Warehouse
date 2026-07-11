@@ -1,0 +1,37 @@
+# Secrets
+.env
+*.env
+!.env.example
+profiles.yml
+!profiles.yml.example
+airflow/config/airflow.cfg
+airflow/config/webserver_config.py
+
+# dbt artifacts (airflow/walmart_project/)
+target/
+dbt_packages/
+logs/
+.user.yml
+
+# Airflow runtime
+airflow/logs/
+airflow/dags/__pycache__/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+
+# data_project_setup is an independent repo living inside this directory;
+# keep it fully out of data_project_dbt's history
+data_project_setup/
+
+# Excalidraw sources for docs/ diagrams — only the exported PNGs are versioned
+docs/*.excalidraw
